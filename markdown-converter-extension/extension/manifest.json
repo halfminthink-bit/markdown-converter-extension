@@ -1,22 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Google Docs Markdown Converter",
-  "version": "1.0.0",
-  "description": "Google DocsでMarkdown記法を簡単に変換できる拡張機能",
+  "version": "1.1.0",
+  "description": "Google DocsでMarkdown記法を簡単に変換できる拡張機能（クリップボード版）",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "clipboardRead",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://docs.google.com/*"
   ],
   "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icon16.png",
-      "48": "icon48.png",
-      "128": "icon128.png"
-    }
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
@@ -24,10 +21,5 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ],
-  "icons": {
-    "16": "icon16.png",
-    "48": "icon48.png",
-    "128": "icon128.png"
-  }
+  ]
 }

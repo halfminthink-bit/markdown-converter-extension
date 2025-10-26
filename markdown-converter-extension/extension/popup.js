@@ -18,19 +18,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 変換ボタンのクリックイベント
   convertBtn.addEventListener('click', async () => {
-    const mode = document.querySelector('input[name="mode"]:checked').value;
-    
-    if (mode !== 'markdown') {
-      resultDiv.textContent = '⚠️ このモードは近日公開予定です';
-      resultDiv.classList.remove('hidden');
-      resultDiv.classList.add('error');
-      return;
-    }
-
     // ボタンを無効化してローディング表示
     convertBtn.disabled = true;
     btnText.innerHTML = '<span class="loading-spinner"></span>変換中...';
-    statusDiv.textContent = '📝 文書を解析しています...';
+    statusDiv.textContent = '📋 クリップボードから読み取り中...';
     statusDiv.classList.remove('hidden');
     resultDiv.classList.add('hidden');
 
@@ -54,6 +45,9 @@ document.addEventListener('DOMContentLoaded', async () => {
               リスト: ${response.details.lists || 0}個<br>
               太字: ${response.details.bold || 0}個
             </div>
+            <div style="font-size: 10px; margin-top: 8px; opacity: 0.6;">
+              💡 F12 → Console でデバッグ情報を確認できます
+            </div>
           `;
         }
       } else {
@@ -62,7 +56,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) {
       console.error('変換エラー:', error);
       statusDiv.classList.add('hidden');
-      resultDiv.textContent = `❌ エラー: ${error.message}`;
+      resultDiv.innerHTML = `
+        <div style="margin-bottom: 8px;">❌ エラー: ${error.message}</div>
+        <div style="font-size: 10px; opacity: 0.7;">
+          F12 → Console でデバッグ情報を確認してください
+        </div>
+      `;
       resultDiv.classList.remove('hidden');
       resultDiv.classList.add('error');
     } finally {

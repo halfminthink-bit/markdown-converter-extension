@@ -1,314 +1,190 @@
-// Google Docs のエディタ要素を取得
-function getDocsEditor() {
-  return document.querySelector('.kix-appview-editor');
-}
+// Google Docs Markdown Converter - クリップボード版
 
-// Google Docs のメニューボタンをクリックして書式を適用
-function applyFormatting(formattingType) {
-  const formatButtons = {
-    'heading1': () => {
-      // Ctrl+Alt+1 のショートカットをシミュレート
-      simulateKeyPress(49, true, true); // 49 = '1'
-    },
-    'heading2': () => {
-      simulateKeyPress(50, true, true); // 50 = '2'
-    },
-    'heading3': () => {
-      simulateKeyPress(51, true, true); // 51 = '3'
-    },
-    'bulletList': () => {
-      simulateKeyPress(56, true, true); // 56 = '8' (Ctrl+Shift+8)
-    },
-    'numberedList': () => {
-      simulateKeyPress(55, true, true); // 55 = '7' (Ctrl+Shift+7)
-    },
-    'bold': () => {
-      simulateKeyPress(66, true, false); // 66 = 'B' (Ctrl+B)
-    }
-  };
+console.log('✅ Google Docs Markdown Converter loaded (クリップボード版)');
 
-  if (formatButtons[formattingType]) {
-    formatButtons[formattingType]();
-  }
-}
-
-// キーボードショートカットをシミュレート
-function simulateKeyPress(keyCode, ctrlKey = false, altKey = false, shiftKey = false) {
-  const editor = getDocsEditor();
-  if (!editor) return;
-
-  const event = new KeyboardEvent('keydown', {
-    bubbles: true,
-    cancelable: true,
-    keyCode: keyCode,
-    which: keyCode,
-    ctrlKey: ctrlKey,
-    altKey: altKey,
-    shiftKey: shiftKey,
-    metaKey: false
-  });
-
-  editor.dispatchEvent(event);
-}
-
-// テキストを選択
-function selectText(node, startOffset, endOffset) {
-  const selection = window.getSelection();
-  const range = document.createRange();
+// Markdownを変換する関数
+function convertMarkdownToGoogleDocs(text) {
+  console.log('\n=== Markdown変換開始 ===');
+  console.log('入力テキスト（最初の200文字）:', text.substring(0, 200));
+  console.log('テキスト長:', text.length);
   
-  try {
-    range.setStart(node, startOffset);
-    range.setEnd(node, endOffset);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return true;
-  } catch (e) {
-    console.error('選択エラー:', e);
-    return false;
-  }
-}
-
-// テキストを削除
-function deleteSelectedText() {
-  document.execCommand('delete', false, null);
-}
-
-// テキストを挿入
-function insertText(text) {
-  document.execCommand('insertText', false, text);
-}
-
-// Markdown記法を検出して変換
-async function convertMarkdown() {
-  const editor = getDocsEditor();
-  if (!editor) {
-    return { success: false, message: 'Google Docsのエディタが見つかりません' };
-  }
-
+  const lines = text.split(/\r?\n/);
+  console.log('行数:', lines.length);
+  
   let conversions = {
     headings: 0,
     lists: 0,
     bold: 0
   };
-
-  // エディタ内のすべてのテキストを取得
-  const paragraphs = editor.querySelectorAll('.kix-paragraphrenderer');
   
-  for (let para of paragraphs) {
-    const textContent = para.textContent;
+  // 変換後のテキストを格納
+  let convertedLines = [];
+  
+  console.log('\n--- 行ごとの変換 ---');
+  
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    let originalLine = line;
+    let converted = false;
     
-    // 見出しの検出と変換
-    if (textContent.match(/^###\s+(.+)/)) {
-      await convertHeading(para, 3);
+    // 見出し3の変換 (### )
+    if (line.match(/^###\s+(.+)/)) {
+      line = line.replace(/^###\s+/, '');
       conversions.headings++;
-    } else if (textContent.match(/^##\s+(.+)/)) {
-      await convertHeading(para, 2);
+      converted = true;
+      console.log(`[${i+1}] 見出し3: "${originalLine}" → "${line}"`);
+    }
+    // 見出し2の変換 (## )
+    else if (line.match(/^##\s+(.+)/)) {
+      line = line.replace(/^##\s+/, '');
       conversions.headings++;
-    } else if (textContent.match(/^#\s+(.+)/)) {
-      await convertHeading(para, 1);
+      converted = true;
+      console.log(`[${i+1}] 見出し2: "${originalLine}" → "${line}"`);
+    }
+    // 見出し1の変換 (# )
+    else if (line.match(/^#\s+(.+)/)) {
+      line = line.replace(/^#\s+/, '');
       conversions.headings++;
+      converted = true;
+      console.log(`[${i+1}] 見出し1: "${originalLine}" → "${line}"`);
     }
     
-    // リストの検出と変換
-    if (textContent.match(/^[-*]\s+(.+)/)) {
-      await convertBulletList(para);
+    // 箇条書きリストの変換 (- または *)
+    if (line.match(/^[-*]\s+(.+)/)) {
+      line = line.replace(/^[-*]\s+/, '• ');
       conversions.lists++;
-    } else if (textContent.match(/^\d+\.\s+(.+)/)) {
-      await convertNumberedList(para);
+      converted = true;
+      console.log(`[${i+1}] 箇条書き: "${originalLine}" → "${line}"`);
+    }
+    // 番号付きリストの変換 (1. 2. など)
+    else if (line.match(/^\d+\.\s+(.+)/)) {
+      // 番号はそのまま維持
       conversions.lists++;
+      converted = true;
+      console.log(`[${i+1}] 番号リスト: "${originalLine}"`);
     }
     
-    // 太字の検出と変換
-    const boldMatches = textContent.match(/\*\*(.+?)\*\*/g);
+    // 太字の変換 (**text**)
+    const boldMatches = line.match(/\*\*(.+?)\*\*/g);
     if (boldMatches) {
-      await convertBold(para, boldMatches);
-      conversions.bold += boldMatches.length;
+      boldMatches.forEach(match => {
+        const innerText = match.replace(/\*\*/g, '');
+        // 太字マークを除去（Google Docsでは貼り付け後に手動で太字化が必要）
+        line = line.replace(match, innerText);
+        conversions.bold++;
+      });
+      converted = true;
+      console.log(`[${i+1}] 太字: "${originalLine}" → "${line}"`);
     }
+    
+    convertedLines.push(line);
   }
-
-  const totalConversions = conversions.headings + conversions.lists + conversions.bold;
   
-  if (totalConversions === 0) {
-    return { 
-      success: true, 
-      message: 'Markdown記法が見つかりませんでした',
-      details: conversions
-    };
-  }
-
-  return { 
-    success: true, 
-    message: `${totalConversions}個の要素を変換しました`,
-    details: conversions
+  const convertedText = convertedLines.join('\n');
+  
+  console.log('\n=== 変換結果 ===');
+  console.log('見出し:', conversions.headings + '個');
+  console.log('リスト:', conversions.lists + '個');
+  console.log('太字:', conversions.bold + '個');
+  console.log('合計:', (conversions.headings + conversions.lists + conversions.bold) + '個');
+  console.log('\n変換後テキスト（最初の200文字）:', convertedText.substring(0, 200));
+  console.log('=== 変換完了 ===\n');
+  
+  return {
+    text: convertedText,
+    conversions: conversions
   };
-}
-
-// 見出しに変換
-async function convertHeading(para, level) {
-  // 段落をクリックして選択
-  para.click();
-  
-  // 少し待機
-  await sleep(50);
-  
-  // Ctrl+A で段落全体を選択
-  simulateKeyPress(65, true, false);
-  
-  await sleep(50);
-  
-  // 見出しを適用
-  if (level === 1) {
-    applyFormatting('heading1');
-  } else if (level === 2) {
-    applyFormatting('heading2');
-  } else if (level === 3) {
-    applyFormatting('heading3');
-  }
-  
-  await sleep(50);
-  
-  // 行頭に移動
-  simulateKeyPress(36, false, false); // Home key
-  
-  await sleep(50);
-  
-  // # 記号を削除（Shift+→で選択してDelete）
-  const hashCount = level;
-  for (let i = 0; i < hashCount + 1; i++) { // +1 はスペース分
-    simulateKeyPress(39, false, false, true); // →キー + Shift
-  }
-  
-  await sleep(50);
-  
-  deleteSelectedText();
-  
-  await sleep(50);
-}
-
-// 箇条書きリストに変換
-async function convertBulletList(para) {
-  para.click();
-  await sleep(50);
-  
-  simulateKeyPress(65, true, false); // Ctrl+A
-  await sleep(50);
-  
-  applyFormatting('bulletList');
-  await sleep(50);
-  
-  // 行頭に移動して記号削除
-  simulateKeyPress(36, false, false);
-  await sleep(50);
-  
-  // - または * とスペースを削除
-  simulateKeyPress(39, false, false, true);
-  simulateKeyPress(39, false, false, true);
-  await sleep(50);
-  
-  deleteSelectedText();
-  await sleep(50);
-}
-
-// 番号付きリストに変換
-async function convertNumberedList(para) {
-  para.click();
-  await sleep(50);
-  
-  simulateKeyPress(65, true, false);
-  await sleep(50);
-  
-  applyFormatting('numberedList');
-  await sleep(50);
-  
-  // 数字と. とスペースを削除
-  simulateKeyPress(36, false, false);
-  await sleep(50);
-  
-  // 数字の桁数に応じて削除（とりあえず最大3桁まで対応）
-  const text = para.textContent;
-  const match = text.match(/^(\d+)\.\s/);
-  if (match) {
-    const deleteCount = match[0].length;
-    for (let i = 0; i < deleteCount; i++) {
-      simulateKeyPress(39, false, false, true);
-    }
-    await sleep(50);
-    deleteSelectedText();
-  }
-  
-  await sleep(50);
-}
-
-// 太字に変換
-async function convertBold(para, matches) {
-  // 各 **text** を順番に処理
-  for (let match of matches) {
-    const text = para.textContent;
-    const index = text.indexOf(match);
-    
-    if (index === -1) continue;
-    
-    // 段落をクリック
-    para.click();
-    await sleep(50);
-    
-    // 行頭に移動
-    simulateKeyPress(36, false, false);
-    await sleep(50);
-    
-    // マッチ位置まで移動
-    for (let i = 0; i < index; i++) {
-      simulateKeyPress(39, false, false);
-      await sleep(10);
-    }
-    
-    // ** を削除（前）
-    simulateKeyPress(46, false, false); // Delete
-    await sleep(30);
-    simulateKeyPress(46, false, false);
-    await sleep(30);
-    
-    // テキスト部分を選択
-    const innerText = match.slice(2, -2);
-    for (let i = 0; i < innerText.length; i++) {
-      simulateKeyPress(39, false, false, true); // Shift+→
-      await sleep(10);
-    }
-    
-    await sleep(50);
-    
-    // 太字を適用
-    applyFormatting('bold');
-    await sleep(50);
-    
-    // 選択解除して右端に移動
-    simulateKeyPress(39, false, false);
-    await sleep(30);
-    
-    // ** を削除（後）
-    simulateKeyPress(46, false, false);
-    await sleep(30);
-    simulateKeyPress(46, false, false);
-    await sleep(50);
-  }
-}
-
-// 待機関数
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // メッセージリスナー
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'convertMarkdown') {
-    convertMarkdown()
+    handleConversion()
       .then(result => sendResponse(result))
-      .catch(error => sendResponse({ 
-        success: false, 
-        message: error.message 
-      }));
+      .catch(error => {
+        console.error('エラー:', error);
+        sendResponse({ 
+          success: false, 
+          message: 'エラーが発生しました: ' + error.message 
+        });
+      });
     return true; // 非同期レスポンスを示す
   }
 });
 
-console.log('Google Docs Markdown Converter loaded');
+// 変換処理のメインロジック
+async function handleConversion() {
+  console.log('\n🚀 変換処理開始');
+  
+  try {
+    // クリップボードからテキストを読み取る
+    console.log('📋 クリップボードからテキストを読み取り中...');
+    const clipboardText = await navigator.clipboard.readText();
+    
+    if (!clipboardText || clipboardText.trim() === '') {
+      return {
+        success: false,
+        message: 'クリップボードが空です。テキストを選択してコピー（Ctrl+C）してください。'
+      };
+    }
+    
+    console.log('✅ クリップボードからテキストを取得しました');
+    console.log('文字数:', clipboardText.length);
+    
+    // Markdown記法が含まれているかチェック
+    const hasMarkdown = 
+      clipboardText.includes('#') ||
+      clipboardText.includes('- ') ||
+      clipboardText.includes('* ') ||
+      clipboardText.includes('**');
+    
+    if (!hasMarkdown) {
+      return {
+        success: false,
+        message: 'Markdown記法が見つかりません。#, -, *, ** などを含むテキストをコピーしてください。'
+      };
+    }
+    
+    // Markdown変換
+    const result = convertMarkdownToGoogleDocs(clipboardText);
+    
+    if (result.conversions.headings === 0 && 
+        result.conversions.lists === 0 && 
+        result.conversions.bold === 0) {
+      return {
+        success: false,
+        message: 'Markdown記法が検出されませんでした。記号の後にスペースを入れてください（例: "# 見出し"）'
+      };
+    }
+    
+    // 変換後のテキストをクリップボードに書き込む
+    console.log('📋 変換後のテキストをクリップボードに書き込み中...');
+    await navigator.clipboard.writeText(result.text);
+    console.log('✅ クリップボードに書き込み完了');
+    
+    return {
+      success: true,
+      message: '変換完了！ Ctrl+V で貼り付けてください。',
+      details: result.conversions
+    };
+    
+  } catch (error) {
+    console.error('❌ エラー:', error);
+    
+    if (error.name === 'NotAllowedError') {
+      return {
+        success: false,
+        message: 'クリップボードへのアクセスが拒否されました。ブラウザの設定を確認してください。'
+      };
+    }
+    
+    throw error;
+  }
+}
+
+// ページ読み込み時の初期化
+console.log('💡 使い方:');
+console.log('1. Markdownテキストを選択');
+console.log('2. Ctrl+C でコピー');
+console.log('3. 拡張機能のボタンをクリック');
+console.log('4. Ctrl+V で貼り付け');
