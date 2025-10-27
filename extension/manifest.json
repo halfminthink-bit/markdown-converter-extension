@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Google Docs Markdown Converter",
+  "version": "2.0.0",
+  "description": "Google DocsでMarkdown記法を見出しやリストに変換",
+  "permissions": [
+    "identity",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://docs.google.com/*",
+    "https://docs.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "179186118253-f4t7lcbita3l1rgq02r83jcmqm4db4pl.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/documents"
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

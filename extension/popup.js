@@ -18,18 +18,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 変換ボタンのクリックイベント
   convertBtn.addEventListener('click', async () => {
+    console.log('🔵 変換ボタンがクリックされました');
+    
     // ボタンを無効化してローディング表示
     convertBtn.disabled = true;
     btnText.innerHTML = '<span class="loading-spinner"></span>変換中...';
-    statusDiv.textContent = '📋 クリップボードから読み取り中...';
+    statusDiv.textContent = '🔐 認証中...';
     statusDiv.classList.remove('hidden');
     resultDiv.classList.add('hidden');
 
     try {
-      // Content scriptにメッセージを送信
-      const response = await chrome.tabs.sendMessage(tab.id, {
+      console.log('🔵 Background Service Workerにメッセージを送信します...');
+      console.log('🔵 chrome.runtime:', chrome.runtime);
+      console.log('🔵 chrome.runtime.id:', chrome.runtime.id);
+      
+      // Background Service Workerにメッセージを送信
+      const response = await chrome.runtime.sendMessage({
         action: 'convertMarkdown'
       });
+      
+      console.log('🔵 レスポンス受信:', response);
 
       if (response.success) {
         statusDiv.classList.add('hidden');
@@ -46,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               太字: ${response.details.bold || 0}個
             </div>
             <div style="font-size: 10px; margin-top: 8px; opacity: 0.6;">
-              💡 F12 → Console でデバッグ情報を確認できます
+              💡 ページをリロードすると反映されます
             </div>
           `;
         }
@@ -54,7 +62,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         throw new Error(response.message || '変換に失敗しました');
       }
     } catch (error) {
-      console.error('変換エラー:', error);
+      console.error('🔴 変換エラー:', error);
+      console.error('🔴 エラー詳細:', error.stack);
       statusDiv.classList.add('hidden');
       resultDiv.innerHTML = `
         <div style="margin-bottom: 8px;">❌ エラー: ${error.message}</div>
