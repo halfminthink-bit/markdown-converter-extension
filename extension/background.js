@@ -1,8 +1,17 @@
-// Background Service Worker - OAuth認証とDocs API処理
+// ============================================================================
+// Background Service Worker - Google Docs Markdown Converter
+// ============================================================================
 
 console.log('🚀 Background Service Worker loaded');
 
-// OAuth トークンを取得
+// ============================================================================
+// 1. 認証関連
+// ============================================================================
+
+/**
+ * OAuth トークンを取得
+ * @returns {Promise<string>} 認証トークン
+ */
 async function getAuthToken() {
   return new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({ interactive: true }, (token) => {
@@ -17,13 +26,26 @@ async function getAuthToken() {
   });
 }
 
-// URLからドキュメントIDを抽出
+// ============================================================================
+// 2. Google Docs API 関連
+// ============================================================================
+
+/**
+ * URLからドキュメントIDを抽出
+ * @param {string} url - Google DocsのURL
+ * @returns {string|null} ドキュメントID
+ */
 function getDocumentIdFromUrl(url) {
   const match = url.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
   return match ? match[1] : null;
 }
 
-// Google Docs API: ドキュメントの内容を取得
+/**
+ * ドキュメントの内容を取得
+ * @param {string} documentId - ドキュメントID
+ * @param {string} token - 認証トークン
+ * @returns {Promise<Object>} ドキュメントオブジェクト
+ */
 async function getDocumentContent(documentId, token) {
   const url = `https://docs.googleapis.com/v1/documents/${documentId}`;
   
@@ -41,7 +63,143 @@ async function getDocumentContent(documentId, token) {
   return await response.json();
 }
 
-// ドキュメントからテキストを抽出
+/**
+ * バッチ更新リクエストを送信
+ * @param {string} documentId - ドキュメントID
+ * @param {string} token - 認証トークン
+ * @param {Array} requests - リクエスト配列
+ * @returns {Promise<Object>} レスポンス
+ */
+async function applyFormatting(documentId, token, requests) {
+  const url = `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`;
+  
+  console.log('📝 書式適用リクエスト数:', requests.length);
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ requests })
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API Error: ${response.status} - ${errorText}`);
+  }
+  
+  return await response.json();
+}
+
+// ============================================================================
+// 3. バックアップと復元
+// ============================================================================
+
+/**
+ * ドキュメントの現在の状態をバックアップ
+ * @param {string} documentId - ドキュメントID
+ * @param {Object} doc - ドキュメントオブジェクト
+ */
+async function saveBackup(documentId, doc) {
+  const backup = {
+    timestamp: Date.now(),
+    content: JSON.stringify(doc),
+    documentId: documentId
+  };
+  
+  await chrome.storage.local.set({
+    [`backup_${documentId}`]: backup
+  });
+  
+  console.log('💾 バックアップ保存完了');
+}
+
+/**
+ * バックアップを取得
+ * @param {string} documentId - ドキュメントID
+ * @returns {Promise<Object|null>} バックアップデータ
+ */
+async function getBackup(documentId) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([`backup_${documentId}`], (result) => {
+      resolve(result[`backup_${documentId}`] || null);
+    });
+  });
+}
+
+/**
+ * バックアップを削除
+ * @param {string} documentId - ドキュメントID
+ */
+async function clearBackup(documentId) {
+  await chrome.storage.local.remove([`backup_${documentId}`]);
+  console.log('🗑️ バックアップ削除完了');
+}
+
+/**
+ * ドキュメントを完全に置き換える
+ * @param {string} documentId - ドキュメントID
+ * @param {string} token - 認証トークン
+ * @param {Object} originalDoc - 元のドキュメント
+ */
+async function restoreDocument(documentId, token, originalDoc) {
+  console.log('📥 ドキュメント復元開始...');
+  
+  // 現在のドキュメントを取得
+  const currentDoc = await getDocumentContent(documentId, token);
+  
+  // すべてのコンテンツを削除
+  const deleteRequests = [{
+    deleteContentRange: {
+      range: {
+        startIndex: 1,
+        endIndex: currentDoc.body.content[currentDoc.body.content.length - 1].endIndex - 1
+      }
+    }
+  }];
+  
+  await applyFormatting(documentId, token, deleteRequests);
+  console.log('🗑️ 既存コンテンツ削除完了');
+  
+  // 元のコンテンツを挿入
+  const insertRequests = [];
+  const originalBody = originalDoc.body;
+  
+  // テキストを抽出して挿入
+  let textToInsert = '';
+  for (const element of originalBody.content) {
+    if (element.paragraph && element.paragraph.elements) {
+      for (const textElement of element.paragraph.elements) {
+        if (textElement.textRun && textElement.textRun.content) {
+          textToInsert += textElement.textRun.content;
+        }
+      }
+    }
+  }
+  
+  if (textToInsert) {
+    insertRequests.push({
+      insertText: {
+        location: { index: 1 },
+        text: textToInsert
+      }
+    });
+  }
+  
+  await applyFormatting(documentId, token, insertRequests);
+  console.log('✅ ドキュメント復元完了');
+}
+
+// ============================================================================
+// 4. テキスト抽出
+// ============================================================================
+
+/**
+ * ドキュメントからテキストを抽出
+ * @param {Object} doc - ドキュメントオブジェクト
+ * @returns {string} 抽出されたテキスト
+ */
 function extractText(doc) {
   let fullText = '';
   const body = doc.body;
@@ -63,90 +221,14 @@ function extractText(doc) {
   return fullText;
 }
 
-// Markdown記法を検出（見出しとリストのみ）
-function detectMarkdown(text) {
-  const lines = text.split('\n');
-  const detections = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // 見出し1
-    if (line.match(/^#\s+(.+)/)) {
-      detections.push({ line: i, type: 'heading1', text: line });
-    }
-    // 見出し2
-    else if (line.match(/^##\s+(.+)/)) {
-      detections.push({ line: i, type: 'heading2', text: line });
-    }
-    // 見出し3
-    else if (line.match(/^###\s+(.+)/)) {
-      detections.push({ line: i, type: 'heading3', text: line });
-    }
-    // 箇条書き
-    else if (line.match(/^[-*]\s+(.+)/)) {
-      detections.push({ line: i, type: 'bullet', text: line });
-    }
-    // 番号付きリスト
-    else if (line.match(/^\d+\.\s+(.+)/)) {
-      detections.push({ line: i, type: 'numbered', text: line });
-    }
-  }
-  
-  return detections;
-}
-
-// 太字の検出（要素ベース - Python版と同じロジック）
-function detectBoldMarkdown(doc) {
-  const detections = [];
-  const body = doc.body;
-  
-  if (!body || !body.content) {
-    return detections;
-  }
-  
-  const boldPattern = /\*\*(.+?)\*\*/g;
-  
-  for (const element of body.content) {
-    const para = element.paragraph;
-    if (!para || !para.elements) {
-      continue;
-    }
-    
-    for (const textElement of para.elements) {
-      const textRun = textElement.textRun;
-      if (!textRun || !textRun.content) {
-        continue;
-      }
-      
-      const content = textRun.content;
-      const baseIndex = textElement.startIndex;
-      
-      // すべての **text** パターンを検出
-      const matches = [...content.matchAll(boldPattern)];
-      for (const match of matches) {
-        const matchStart = match.index;
-        const matchEnd = matchStart + match[0].length;
-        
-        detections.push({
-          type: 'bold',
-          startIndex: baseIndex + matchStart,      // ** の開始位置
-          endIndex: baseIndex + matchEnd,          // ** の終了位置
-          innerStart: baseIndex + matchStart + 2,  // 内側テキストの開始
-          innerEnd: baseIndex + matchEnd - 2,      // 内側テキストの終了
-          innerText: match[1],
-          fullMatch: match[0]
-        });
-      }
-    }
-  }
-  
-  return detections;
-}
-
-// テキストの位置を検索
+/**
+ * テキストの位置を検索
+ * @param {Object} doc - ドキュメントオブジェクト
+ * @param {string} searchText - 検索するテキスト
+ * @returns {Object|null} 位置情報 {startIndex, endIndex}
+ */
 function findTextPosition(doc, searchText) {
-  let currentIndex = 1; // ⚠️ Google Docs API はインデックス1から開始
+  let currentIndex = 1; // Google Docs API はインデックス1から開始
   const body = doc.body;
   
   if (!body || !body.content) {
@@ -176,114 +258,190 @@ function findTextPosition(doc, searchText) {
   return null;
 }
 
-// Google Docs API: バッチ更新リクエストを送信
-async function applyFormatting(documentId, token, requests) {
-  const url = `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`;
+// ============================================================================
+// 5. Markdown検出
+// ============================================================================
+
+/**
+ * 見出しとリストのMarkdown記法を検出
+ * @param {string} text - テキスト
+ * @returns {Array} 検出結果の配列
+ */
+function detectMarkdown(text) {
+  const lines = text.split('\n');
+  const detections = [];
   
-  console.log('📝 書式適用リクエスト:', JSON.stringify(requests, null, 2));
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ requests })
-  });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error: ${response.status} - ${errorText}`);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    
+    if (!trimmedLine) continue;
+    
+    // 見出し1
+    if (trimmedLine.match(/^#\s+(.+)/)) {
+      detections.push({ line: i, type: 'heading1', text: line });
+    }
+    // 見出し2
+    else if (trimmedLine.match(/^##\s+(.+)/)) {
+      detections.push({ line: i, type: 'heading2', text: line });
+    }
+    // 見出し3
+    else if (trimmedLine.match(/^###\s+(.+)/)) {
+      detections.push({ line: i, type: 'heading3', text: line });
+    }
+    // 箇条書き
+    else if (trimmedLine.match(/^[-*]\s*(.+)/)) {
+      detections.push({ line: i, type: 'bullet', text: line });
+    }
+    // 番号付きリスト
+    else if (trimmedLine.match(/^\d+\.\s*(.+)/)) {
+      detections.push({ line: i, type: 'numbered', text: line });
+    }
   }
   
-  return await response.json();
+  return detections;
 }
 
-// Markdown記法に基づいて書式リクエストを生成（見出しとリスト）
-function createFormattingRequests(doc, detections) {
+/**
+ * 太字のMarkdown記法を検出（要素ベース）
+ * @param {Object} doc - ドキュメントオブジェクト
+ * @returns {Array} 検出結果の配列
+ */
+function detectBoldMarkdown(doc) {
+  const detections = [];
+  const body = doc.body;
+  
+  if (!body || !body.content) {
+    return detections;
+  }
+  
+  const boldPattern = /\*\*(.+?)\*\*/g;
+  
+  for (const element of body.content) {
+    const para = element.paragraph;
+    if (!para || !para.elements) {
+      continue;
+    }
+    
+    for (const textElement of para.elements) {
+      const textRun = textElement.textRun;
+      if (!textRun || !textRun.content) {
+        continue;
+      }
+      
+      const content = textRun.content;
+      const baseIndex = textElement.startIndex;
+      
+      const matches = [...content.matchAll(boldPattern)];
+      for (const match of matches) {
+        const matchStart = match.index;
+        const matchEnd = matchStart + match[0].length;
+        
+        detections.push({
+          type: 'bold',
+          startIndex: baseIndex + matchStart,
+          endIndex: baseIndex + matchEnd,
+          innerStart: baseIndex + matchStart + 2,
+          innerEnd: baseIndex + matchEnd - 2,
+          innerText: match[1],
+          fullMatch: match[0]
+        });
+      }
+    }
+  }
+  
+  return detections;
+}
+
+// ============================================================================
+// 6. 書式リクエスト生成
+// ============================================================================
+
+/**
+ * 見出しとリスト用の書式リクエストを生成
+ */
+function createFormattingRequestsForHeadingsAndLists(doc, detections) {
   const requests = [];
   
-  // 逆順で処理（後ろから削除しないと位置がずれる）
   for (let i = detections.length - 1; i >= 0; i--) {
     const detection = detections[i];
-    console.log(`処理中: ${detection.type} - "${detection.text.substring(0, 50)}"`);
-    
-    // テキストの位置を検索
-    const position = findTextPosition(doc, detection.text);
+    const trimmedText = detection.text.trim();
+    const position = findTextPosition(doc, detection.text) || findTextPosition(doc, trimmedText);
     
     if (!position) {
       console.warn(`⚠️ テキストが見つかりません: "${detection.text}"`);
       continue;
     }
     
-    console.log(`✅ 位置検出: ${position.startIndex} - ${position.endIndex}`);
-    
-    // まず書式を適用（削除前に）
+    // 書式を適用
     if (detection.type === 'heading1') {
       requests.push({
         updateParagraphStyle: {
-          range: {
-            startIndex: position.startIndex,
-            endIndex: position.endIndex
-          },
-          paragraphStyle: {
-            namedStyleType: 'HEADING_1'
-          },
+          range: { startIndex: position.startIndex, endIndex: position.endIndex },
+          paragraphStyle: { namedStyleType: 'HEADING_1' },
           fields: 'namedStyleType'
         }
       });
     } else if (detection.type === 'heading2') {
       requests.push({
         updateParagraphStyle: {
-          range: {
-            startIndex: position.startIndex,
-            endIndex: position.endIndex
-          },
-          paragraphStyle: {
-            namedStyleType: 'HEADING_2'
-          },
+          range: { startIndex: position.startIndex, endIndex: position.endIndex },
+          paragraphStyle: { namedStyleType: 'HEADING_2' },
           fields: 'namedStyleType'
         }
       });
     } else if (detection.type === 'heading3') {
       requests.push({
         updateParagraphStyle: {
-          range: {
-            startIndex: position.startIndex,
-            endIndex: position.endIndex
-          },
-          paragraphStyle: {
-            namedStyleType: 'HEADING_3'
-          },
+          range: { startIndex: position.startIndex, endIndex: position.endIndex },
+          paragraphStyle: { namedStyleType: 'HEADING_3' },
           fields: 'namedStyleType'
         }
       });
     } else if (detection.type === 'bullet') {
       requests.push({
         createParagraphBullets: {
-          range: {
-            startIndex: position.startIndex,
-            endIndex: position.endIndex
-          },
+          range: { startIndex: position.startIndex, endIndex: position.endIndex },
           bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE'
+        }
+      });
+    } else if (detection.type === 'numbered') {
+      requests.push({
+        createParagraphBullets: {
+          range: { startIndex: position.startIndex, endIndex: position.endIndex },
+          bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN'
         }
       });
     }
     
-    // その後、Markdown記号を削除
+    // Markdown記号を削除
     let symbolLength = 0;
-    if (detection.type === 'heading1') symbolLength = 2; // "# "
-    else if (detection.type === 'heading2') symbolLength = 3; // "## "
-    else if (detection.type === 'heading3') symbolLength = 4; // "### "
-    else if (detection.type === 'bullet') symbolLength = 2; // "- "
+    const trimmedLine = detection.text.trim();
+    
+    if (detection.type === 'heading1') {
+      const match = trimmedLine.match(/^#\s+/);
+      symbolLength = match ? match[0].length : 2;
+    } else if (detection.type === 'heading2') {
+      const match = trimmedLine.match(/^##\s+/);
+      symbolLength = match ? match[0].length : 3;
+    } else if (detection.type === 'heading3') {
+      const match = trimmedLine.match(/^###\s+/);
+      symbolLength = match ? match[0].length : 4;
+    } else if (detection.type === 'bullet') {
+      const match = trimmedLine.match(/^[-*]\s*/);
+      symbolLength = match ? match[0].length : 2;
+    } else if (detection.type === 'numbered') {
+      const match = trimmedLine.match(/^\d+\.\s*/);
+      symbolLength = match ? match[0].length : 3;
+    }
+    
+    const leadingSpaces = detection.text.length - detection.text.trimStart().length;
+    const actualStart = position.startIndex + leadingSpaces;
     
     if (symbolLength > 0) {
       requests.push({
         deleteContentRange: {
-          range: {
-            startIndex: position.startIndex,
-            endIndex: position.startIndex + symbolLength
-          }
+          range: { startIndex: actualStart, endIndex: actualStart + symbolLength }
         }
       });
     }
@@ -292,51 +450,32 @@ function createFormattingRequests(doc, detections) {
   return requests;
 }
 
-// 太字用の書式リクエストを生成（Python版と同じロジック）
+/**
+ * 太字用の書式リクエストを生成
+ */
 function createFormattingRequestsForBold(boldDetections) {
   const requests = [];
   
-  // 逆順で処理（後ろから削除しないと位置がずれる）
   for (let i = boldDetections.length - 1; i >= 0; i--) {
     const detection = boldDetections[i];
-    console.log(`太字処理中: "${detection.innerText}" at ${detection.innerStart}-${detection.innerEnd}`);
     
-    // 1. まず内側のテキストに太字スタイルを適用
     requests.push({
       updateTextStyle: {
-        range: {
-          startIndex: detection.innerStart,
-          endIndex: detection.innerEnd
-        },
-        textStyle: {
-          bold: true
-        },
+        range: { startIndex: detection.innerStart, endIndex: detection.innerEnd },
+        textStyle: { bold: true },
         fields: 'bold'
       }
     });
-  }
-  
-  // 次に、すべての ** を削除（逆順）
-  for (let i = boldDetections.length - 1; i >= 0; i--) {
-    const detection = boldDetections[i];
     
-    // 後ろの ** を削除（2文字）
     requests.push({
       deleteContentRange: {
-        range: {
-          startIndex: detection.endIndex - 2,
-          endIndex: detection.endIndex
-        }
+        range: { startIndex: detection.endIndex - 2, endIndex: detection.endIndex }
       }
     });
     
-    // 前の ** を削除（2文字）
     requests.push({
       deleteContentRange: {
-        range: {
-          startIndex: detection.startIndex,
-          endIndex: detection.startIndex + 2
-        }
+        range: { startIndex: detection.startIndex, endIndex: detection.startIndex + 2 }
       }
     });
   }
@@ -344,122 +483,135 @@ function createFormattingRequestsForBold(boldDetections) {
   return requests;
 }
 
-// メインの変換処理
+// ============================================================================
+// 7. メイン変換処理
+// ============================================================================
+
+/**
+ * Markdown を Google Docs の書式に変換
+ */
 async function convertMarkdown(tabUrl) {
   console.log('\n=== Markdown変換開始 ===');
-  console.log('URL:', tabUrl);
   
   try {
-    // 1. ドキュメントIDを取得
     const documentId = getDocumentIdFromUrl(tabUrl);
     if (!documentId) {
       throw new Error('ドキュメントIDを取得できませんでした');
     }
-    console.log('✅ ドキュメントID:', documentId);
     
-    // 2. 認証トークンを取得
-    console.log('🔐 認証中...');
     const token = await getAuthToken();
-    
-    // 3. ドキュメントの内容を取得
-    console.log('📥 ドキュメント取得中...');
     const doc = await getDocumentContent(documentId, token);
-    console.log('✅ ドキュメント取得成功');
     
-    // 4. テキストを抽出
+    // バックアップを保存
+    await saveBackup(documentId, doc);
+    
     const text = extractText(doc);
-    console.log('📝 テキスト抽出:', text.substring(0, 200) + '...');
-    
-    // 5. Markdown記法を検出（見出しとリスト）
-    const detections = detectMarkdown(text);
-    console.log('🔍 見出し/リスト検出:', detections.length + '個');
-    
-    // 6. 太字を検出
+    const headingsAndLists = detectMarkdown(text);
     const boldDetections = detectBoldMarkdown(doc);
-    console.log('🔍 太字検出:', boldDetections.length + '個');
     
-    if (detections.length === 0 && boldDetections.length === 0) {
+    console.log('🔍 見出し/リスト:', headingsAndLists.length + '個');
+    console.log('🔍 太字:', boldDetections.length + '個');
+    
+    if (headingsAndLists.length === 0 && boldDetections.length === 0) {
       return {
         success: false,
         message: 'Markdown記法が見つかりませんでした'
       };
     }
     
-    detections.forEach(d => {
-      console.log(`  - ${d.type}: "${d.text.substring(0, 50)}..."`);
-    });
-    
-    boldDetections.forEach(d => {
-      console.log(`  - bold: "**${d.innerText}**"`);
-    });
-    
-    // 7. 見出しとリストの書式を適用
-    if (detections.length > 0) {
-      const requests = createFormattingRequests(doc, detections);
-      console.log('📋 見出し/リスト書式リクエスト:', requests.length + '個');
-      console.log('✏️ 見出し/リスト書式適用中...');
-      await applyFormatting(documentId, token, requests);
-      console.log('✅ 見出し/リスト書式適用完了');
+    // 見出しとリストを変換
+    if (headingsAndLists.length > 0) {
+      const headingRequests = createFormattingRequestsForHeadingsAndLists(doc, headingsAndLists);
+      await applyFormatting(documentId, token, headingRequests);
+      console.log('✅ 見出し/リスト変換完了');
     }
     
-    // 8. 太字の書式を適用（ドキュメントを再取得してから）
+    // 太字を変換
     if (boldDetections.length > 0) {
-      console.log('📥 ドキュメント再取得中...');
       const docAfter = await getDocumentContent(documentId, token);
       const boldDetectionsAfter = detectBoldMarkdown(docAfter);
-      console.log('🔍 太字再検出:', boldDetectionsAfter.length + '個');
       
       if (boldDetectionsAfter.length > 0) {
         const boldRequests = createFormattingRequestsForBold(boldDetectionsAfter);
-        console.log('📋 太字書式リクエスト:', boldRequests.length + '個');
-        console.log('✏️ 太字書式適用中...');
         await applyFormatting(documentId, token, boldRequests);
-        console.log('✅ 太字書式適用完了');
+        console.log('✅ 太字変換完了');
       }
     }
     
     return {
       success: true,
-      message: `${detections.length + boldDetections.length}個のMarkdown記法を変換しました`,
+      message: `${headingsAndLists.length + boldDetections.length}個のMarkdown記法を変換しました`,
       details: {
-        headings: detections.filter(d => d.type.startsWith('heading')).length,
-        lists: detections.filter(d => d.type === 'bullet' || d.type === 'numbered').length,
+        headings: headingsAndLists.filter(d => d.type.startsWith('heading')).length,
+        lists: headingsAndLists.filter(d => d.type === 'bullet' || d.type === 'numbered').length,
         bold: boldDetections.length
       }
     };
     
   } catch (error) {
     console.error('❌ エラー:', error);
-    return {
-      success: false,
-      message: 'エラー: ' + error.message
-    };
+    return { success: false, message: 'エラー: ' + error.message };
   }
 }
 
-// メッセージリスナー
+/**
+ * 変換を元に戻す
+ */
+async function undoConversion(tabUrl) {
+  console.log('\n=== 元に戻す処理開始 ===');
+  
+  try {
+    const documentId = getDocumentIdFromUrl(tabUrl);
+    if (!documentId) {
+      throw new Error('ドキュメントIDを取得できませんでした');
+    }
+    
+    const backup = await getBackup(documentId);
+    if (!backup) {
+      throw new Error('バックアップが見つかりません');
+    }
+    
+    const token = await getAuthToken();
+    const originalDoc = JSON.parse(backup.content);
+    
+    await restoreDocument(documentId, token, originalDoc);
+    await clearBackup(documentId);
+    
+    return {
+      success: true,
+      message: '元の状態に復元しました'
+    };
+    
+  } catch (error) {
+    console.error('❌ エラー:', error);
+    return { success: false, message: 'エラー: ' + error.message };
+  }
+}
+
+// ============================================================================
+// 8. メッセージリスナー
+// ============================================================================
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'convertMarkdown') {
-    console.log('📨 変換リクエスト受信');
-    
-    // 現在のタブのURLを取得
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
         convertMarkdown(tabs[0].url)
-          .then(result => {
-            console.log('📤 変換結果:', result);
-            sendResponse(result);
-          })
-          .catch(error => {
-            console.error('❌ 変換エラー:', error);
-            sendResponse({
-              success: false,
-              message: error.message
-            });
-          });
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, message: error.message }));
       }
     });
-    
-    return true; // 非同期レスポンス
+    return true;
+  }
+  
+  if (request.action === 'undoConversion') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        undoConversion(tabs[0].url)
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, message: error.message }));
+      }
+    });
+    return true;
   }
 });
